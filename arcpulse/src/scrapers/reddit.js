@@ -114,7 +114,7 @@ class RedditScraper {
       url:         `https://reddit.com${post.permalink}`,
       score:       post.score || 0,
       numComments: post.num_comments || 0,
-      createdAt:   new Date(post.created_utc * 1000).toISOString(),
+      publishedAt: new Date(post.created_utc * 1000).toISOString(),
       searchQuery: query,
     };
   }
@@ -131,7 +131,7 @@ class RedditScraper {
       url:         `https://reddit.com${comment.permalink}`,
       score:       comment.score || 0,
       numComments: 0,
-      createdAt:   new Date(comment.created_utc * 1000).toISOString(),
+      publishedAt: new Date(comment.created_utc * 1000).toISOString(),
       searchQuery: query,
     };
   }

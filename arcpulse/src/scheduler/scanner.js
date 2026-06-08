@@ -17,11 +17,16 @@ class Scanner {
 
   async run(scanType = 'full') {
     const start = Date.now();
-    const { brands, competitors, keywords } = this.config;
     logger.info(`ArcPulse scanner: starting ${scanType} scan`);
 
+    // Firestore config doc takes precedence over env vars
+    const configDoc = await this.db.getMonitoringConfig();
+    const brands      = configDoc?.brandNames?.length      ? configDoc.brandNames      : this.config.brands;
+    const competitors = configDoc?.competitorNames?.length ? configDoc.competitorNames : this.config.competitors;
+    const keywords    = configDoc?.keywords?.length        ? configDoc.keywords        : this.config.keywords;
+
     if (!brands.length) {
-      logger.warn('No brands configured — set BRAND_NAMES env var');
+      logger.warn('No brands configured — set BRAND_NAMES env var or save config via dashboard');
       return { success: false, error: 'No brands configured' };
     }
 
@@ -31,8 +36,11 @@ class Scanner {
         raw.push(...await this.reddit.runFullScan(brands, competitors, keywords));
       }
       if (scanType === 'web' || scanType === 'full') {
+        const alertUrls = configDoc?.googleAlertsRssUrls?.length
+          ? configDoc.googleAlertsRssUrls
+          : (process.env.GOOGLE_ALERTS_RSS_URLS || '').split(',').filter(Boolean);
         raw.push(...await this.web.runFullScan(brands, competitors, keywords, {
-          googleAlertsRssUrls: (process.env.GOOGLE_ALERTS_RSS_URLS || '').split(',').filter(Boolean),
+          googleAlertsRssUrls: alertUrls,
           industryRssFeeds: JSON.parse(process.env.INDUSTRY_RSS_FEEDS || '[]'),
         }));
       }

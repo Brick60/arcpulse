@@ -12,10 +12,15 @@ class FirestoreDB {
     let saved = 0, skipped = 0;
     const chunks = this._chunk(mentions, 30);
     for (const chunk of chunks) {
-      const existingIds = await this._getExistingIds(chunk.map(m => m.sourceId));
+      const existingDocs = await this._getExistingDocs(chunk.map(m => m.sourceId));
       const batch = this.db.batch();
       chunk.forEach(m => {
-        if (existingIds.has(m.sourceId)) { skipped++; return; }
+        const existing = existingDocs.get(m.sourceId);
+        // Skip only if already categorized properly (not unknown)
+        if (existing && existing.category && existing.category !== 'unknown') {
+          skipped++;
+          return;
+        }
         const ref = this.db.collection(this.col).doc(m.sourceId);
         batch.set(ref, {
           ...m,
@@ -41,14 +46,17 @@ class FirestoreDB {
   async getMentions(filters = {}) {
     const { category, platform, urgent, limit = 50, hoursBack = 24 } = filters;
     const since = new Date(Date.now() - hoursBack * 3600000);
-    let q = this.db.collection(this.col)
-      .where('savedAt', '>=', Firestore.Timestamp.fromDate(since));
-    if (category) q = q.where('category', '==', category);
-    if (platform) q = q.where('platform', '==', platform);
-    if (urgent)   q = q.where('urgent', '==', true);
-    q = q.orderBy('urgencyScore', 'desc').limit(limit);
-    const snap = await q.get();
-    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const snap = await this.db.collection(this.col)
+      .where('savedAt', '>=', Firestore.Timestamp.fromDate(since))
+      .orderBy('savedAt', 'desc')
+      .get();
+    let docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (category) docs = docs.filter(m => m.category === category);
+    if (platform) docs = docs.filter(m => m.platform === platform);
+    if (urgent)   docs = docs.filter(m => m.urgent === true);
+    return docs
+      .sort((a, b) => (b.urgencyScore || 0) - (a.urgencyScore || 0))
+      .slice(0, limit);
   }
 
   async getStats(hoursBack = 24) {
@@ -74,12 +82,27 @@ class FirestoreDB {
     };
   }
 
-  async _getExistingIds(ids) {
-    const existing = new Set();
+  async getMonitoringConfig() {
+    const doc = await this.db.collection('config').doc('monitoring').get();
+    return doc.exists ? doc.data() : null;
+  }
+
+  async saveMonitoringConfig({ brandNames, competitorNames, keywords, googleAlertsRssUrls }) {
+    await this.db.collection('config').doc('monitoring').set({
+      brandNames:           brandNames           || [],
+      competitorNames:      competitorNames      || [],
+      keywords:             keywords             || [],
+      googleAlertsRssUrls:  googleAlertsRssUrls  || [],
+      updatedAt:            Firestore.Timestamp.now(),
+    });
+  }
+
+  async _getExistingDocs(ids) {
+    const existing = new Map();
     if (!ids.length) return existing;
     const refs = ids.map(id => this.db.collection(this.col).doc(id));
     const docs = await this.db.getAll(...refs);
-    docs.forEach(d => { if (d.exists) existing.add(d.id); });
+    docs.forEach(d => { if (d.exists) existing.set(d.id, d.data()); });
     return existing;
   }
 

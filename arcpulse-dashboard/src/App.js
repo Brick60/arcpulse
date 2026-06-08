@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { api, DEMO_STATS, DEMO_MENTIONS } from './lib/api';
+import { signInWithGoogle, signOutUser, onAuth } from './firebase';
 import './App.css';
 
 const PLATFORM_COLORS = {
@@ -86,7 +87,7 @@ function MentionCard({ mention, onReplyEdit }) {
           )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-          <span className="time-label">{timeAgo(mention.createdAt)}</span>
+          <span className="time-label">{timeAgo(mention.publishedAt || mention.createdAt)}</span>
           <UrgencyBar score={mention.urgencyScore} />
         </div>
       </div>
@@ -169,32 +170,106 @@ function PlatformBreakdown({ byPlatform, total }) {
   );
 }
 
+function ChipInput({ label, values, onChange }) {
+  const [input, setInput] = useState('');
+  const add = () => {
+    const v = input.trim();
+    if (v && !values.includes(v)) onChange([...values, v]);
+    setInput('');
+  };
+  return (
+    <div className="settings-section">
+      <div className="modal-section-label">{label}</div>
+      <div className="tag-list">
+        {values.map((v, i) => (
+          <span key={i} className="tag-chip">
+            {v}
+            <button className="tag-remove" onClick={() => onChange(values.filter((_, j) => j !== i))}>×</button>
+          </span>
+        ))}
+      </div>
+      <div className="tag-add-row">
+        <input
+          className="tag-input"
+          value={input}
+          placeholder={`Add ${label.toLowerCase()}…`}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add(); } }}
+        />
+        <button className="btn" onClick={add}>Add</button>
+      </div>
+    </div>
+  );
+}
+
+function LoginScreen({ onLogin }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const handleLogin = async () => {
+    setLoading(true);
+    try { await onLogin(); } catch (e) { setError(e.message); setLoading(false); }
+  };
+  return (
+    <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)' }}>
+      <div style={{ textAlign: 'center', padding: 40 }}>
+        <div style={{ fontSize: 32, color: 'var(--accent)', marginBottom: 12 }}>◈</div>
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 20, letterSpacing: '0.1em', marginBottom: 8 }}>ArcPulse</div>
+        <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 32 }}>CMR Fabrications brand monitor</div>
+        <button
+          onClick={handleLogin}
+          disabled={loading}
+          style={{ padding: '10px 24px', borderRadius: 6, border: '1px solid var(--border-mid)', background: 'var(--bg-hover)', color: 'var(--text)', fontFamily: 'var(--font-sans)', fontSize: 14, cursor: 'pointer' }}
+        >
+          {loading ? 'Signing in...' : 'Sign in with Google'}
+        </button>
+        {error && <div style={{ marginTop: 12, fontSize: 12, color: '#ef4444' }}>{error}</div>}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
-  const [stats, setStats]           = useState(DEMO_STATS);
-  const [mentions, setMentions]     = useState(DEMO_MENTIONS);
+  const [user, setUser]             = useState(undefined);
+  const [stats, setStats]           = useState({ total:0, urgent:0, defend:0, engage:0, competitor:0, positive:0, negative:0, byPlatform:{} });
+  const [mentions, setMentions]     = useState([]);
   const [activeTab, setActiveTab]   = useState('defend');
   const [platformFilter, setPF]     = useState('all');
   const [scanning, setScanning]     = useState(false);
   const [lastScan, setLastScan]     = useState(null);
   const [editMention, setEditMention] = useState(null);
   const [hoursBack, setHoursBack]   = useState(24);
-  const [usingDemo, setUsingDemo]   = useState(true);
+  const [usingDemo, setUsingDemo]   = useState(false);
+  const [apiError, setApiError]     = useState(null);
+  const [loading, setLoading]       = useState(true);
+  const [showSettings, setShowSettings]         = useState(false);
+  const [settingsBrands, setSettingsBrands]     = useState([]);
+  const [settingsComps, setSettingsComps]       = useState([]);
+  const [settingsKws, setSettingsKws]           = useState([]);
+  const [settingsAlerts, setSettingsAlerts]     = useState([]);
+  const [settingsLoading, setSettingsLoading]   = useState(false);
+  const [settingsSaving, setSettingsSaving]     = useState(false);
+
+  useEffect(() => onAuth(u => setUser(u || null)), []);
 
   const loadData = useCallback(async () => {
     try {
+      setApiError(null);
+      setLoading(true);
       const [s, m] = await Promise.all([
         api.getStats(hoursBack),
         api.getMentions({ hoursBack, limit: 100 }),
       ]);
       setStats(s);
       setMentions(m.mentions || []);
-      setUsingDemo(false);
-    } catch {
-      // No API configured — stay on demo data
+    } catch (err) {
+      console.error('API error:', err);
+      setApiError(err.message);
+    } finally {
+      setLoading(false);
     }
   }, [hoursBack]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => { if (user) loadData(); }, [loadData, user]);
 
   const triggerScan = async (type) => {
     setScanning(true);
@@ -203,6 +278,34 @@ export default function App() {
       setTimeout(() => { loadData(); setScanning(false); setLastScan(new Date()); }, 3000);
     } catch {
       setScanning(false);
+    }
+  };
+
+  const openSettings = async () => {
+    setShowSettings(true);
+    setSettingsLoading(true);
+    try {
+      const cfg = await api.getConfig();
+      setSettingsBrands(cfg.brandNames           || []);
+      setSettingsComps(cfg.competitorNames       || []);
+      setSettingsKws(cfg.keywords                || []);
+      setSettingsAlerts(cfg.googleAlertsRssUrls  || []);
+    } catch (err) {
+      console.error('Failed to load config:', err);
+    } finally {
+      setSettingsLoading(false);
+    }
+  };
+
+  const saveSettings = async () => {
+    setSettingsSaving(true);
+    try {
+      await api.saveConfig({ brandNames: settingsBrands, competitorNames: settingsComps, keywords: settingsKws, googleAlertsRssUrls: settingsAlerts });
+      setShowSettings(false);
+    } catch (err) {
+      console.error('Failed to save config:', err);
+    } finally {
+      setSettingsSaving(false);
     }
   };
 
@@ -224,6 +327,9 @@ export default function App() {
     h: `${(i * 2) % 24}h`,
     v: Math.floor(Math.random() * 8) + 2,
   }));
+
+  if (user === undefined) return null; // auth loading
+  if (!user) return <LoginScreen onLogin={signInWithGoogle} />;
 
   return (
     <div className="app">
@@ -282,6 +388,16 @@ export default function App() {
         </div>
 
         <div className="sidebar-footer">
+          <div className="user-profile">
+            {user?.photoURL && (
+              <img src={user.photoURL} alt="" className="user-avatar" referrerPolicy="no-referrer" />
+            )}
+            <div className="user-info">
+              <div className="user-name">{user?.displayName || user?.email}</div>
+              <div className="user-email">{user?.displayName ? user.email : ''}</div>
+            </div>
+            <button className="logout-btn" onClick={signOutUser} title="Sign out">↩</button>
+          </div>
           <div className="scan-controls">
             <button
               className={`scan-btn ${scanning ? 'scanning' : ''}`}
@@ -301,11 +417,12 @@ export default function App() {
           {lastScan && (
             <div className="last-scan">Last scan: {timeAgo(lastScan.toISOString())}</div>
           )}
-          {usingDemo && (
-            <div className="demo-notice">
-              Demo data — set REACT_APP_API_URL to connect your backend
+          {apiError && (
+            <div className="demo-notice" style={{ color: '#ef4444' }}>
+              API error: {apiError}
             </div>
           )}
+          <button className="settings-btn" onClick={openSettings}>⚙ Monitoring settings</button>
         </div>
       </aside>
 
@@ -338,8 +455,17 @@ export default function App() {
             {tabMentions.length === 0 ? (
               <div className="empty-feed">
                 <div className="empty-icon">◈</div>
-                <div>No mentions in this category yet</div>
-                <div style={{ fontSize: 13, marginTop: 6, color: 'var(--text-muted)' }}>Run a scan to pull fresh data</div>
+                {loading
+                  ? <div>Loading…</div>
+                  : <>
+                      <div>No mentions in this category yet</div>
+                      <div style={{ fontSize: 13, marginTop: 6, color: 'var(--text-muted)' }}>
+                        {stats.total === 0
+                          ? 'Add Reddit credentials to start monitoring welding communities'
+                          : 'Run a scan to pull fresh data'}
+                      </div>
+                    </>
+                }
               </div>
             ) : (
               <div className="feed-list">
@@ -417,6 +543,39 @@ export default function App() {
           </div>
         </div>
       </main>
+
+      {/* ── Settings modal ── */}
+      {showSettings && (
+        <div className="modal-overlay" onClick={() => setShowSettings(false)}>
+          <div className="modal" style={{ width: 520 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title">⚙ Monitoring settings</div>
+              <button className="modal-close" onClick={() => setShowSettings(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              {settingsLoading ? (
+                <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>Loading…</div>
+              ) : (
+                <>
+                  <ChipInput label="Brands" values={settingsBrands} onChange={setSettingsBrands} />
+                  <ChipInput label="Competitors" values={settingsComps} onChange={setSettingsComps} />
+                  <ChipInput label="Keywords" values={settingsKws} onChange={setSettingsKws} />
+                  <ChipInput label="Google Alerts RSS feeds" values={settingsAlerts} onChange={setSettingsAlerts} />
+                  <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>
+                    Paste a Google Alerts RSS URL per feed. Changes take effect on the next scan.
+                  </div>
+                </>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button className="btn" onClick={() => setShowSettings(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={saveSettings} disabled={settingsSaving || settingsLoading}>
+                {settingsSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Edit reply modal ── */}
       {editMention && (

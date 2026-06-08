@@ -1,0 +1,12 @@
+{
+  "name": "arcpulse-functions",
+  "version": "1.0.0",
+  "main": "index.js",
+  "engines": { "node": "20" },
+  "dependencies": {
+    "firebase-admin": "^12.0.0",
+    "firebase-functions": "^5.0.0",
+    "google-auth-library": "^9.0.0",
+    "node-fetch": "^2.7.0"
+  }
+}

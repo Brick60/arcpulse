@@ -1,7 +1,13 @@
-const BASE = process.env.REACT_APP_API_URL || 'http://localhost:8080';
+import { auth } from '../firebase';
+
+const CLOUD_RUN = 'https://arcpulse-304203583577.us-central1.run.app';
 
 async function req(path, opts = {}) {
-  const res = await fetch(`${BASE}${path}`, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  const user = auth.currentUser;
+  const token = user ? await user.getIdToken() : null;
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const res = await fetch(`${CLOUD_RUN}${path}`, { ...opts, headers });
   if (!res.ok) throw new Error(`${res.status} ${path}`);
   return res.json();
 }
@@ -10,6 +16,8 @@ export const api = {
   getStats:    (h = 24)   => req(`/stats?hoursBack=${h}`),
   getMentions: (f = {})   => req(`/mentions?${new URLSearchParams(Object.fromEntries(Object.entries(f).filter(([,v]) => v != null && v !== '')))}`)  ,
   triggerScan: (t = 'full') => req(`/scan/${t}`, { method: 'POST', body: '{}' }),
+  getConfig:   ()           => req('/config'),
+  saveConfig:  (data)       => req('/config', { method: 'POST', body: JSON.stringify(data) }),
 };
 
 export const DEMO_STATS = {
